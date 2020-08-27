@@ -1,0 +1,26 @@
+{
+	"name": "ipevt",
+	"version": "0.9.0",
+	"description": "A small library that allows peers to communicate via a central server",
+	"main": "ipevt-client.js",
+	"bin": {
+		"ipevt-server": "ipevt-server.js"
+	},
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/JCloudYu/ipevt.git"
+	},
+	"keywords": [ "IPC", "IPEVT" ],
+	"author": "JCloudYu",
+	"license": "ISC",
+	"bugs": {
+		"url": "https://github.com/JCloudYu/ipevt/issues"
+	},
+	"homepage": "https://github.com/JCloudYu/ipevt#readme",
+	"dependencies": {
+		"beson": "^3.0.2"
+	}
+}
