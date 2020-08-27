@@ -144,6 +144,11 @@
 				const res = resolve;
 				resolve = null;
 				res(socket);
+				
+				socket.emit('connected');
+			})
+			.on('_event', (event, arg)=>{
+				socket.emit(event, arg);
 			});
 			
 			
@@ -313,7 +318,7 @@
 				}
 					
 				case MSG_TYPE.EVNT: {
-					client.socket.emit(msg.event, msg.arg);
+					client.socket.emit('_event', msg.event, msg.arg);
 					break;
 				}
 				
@@ -474,9 +479,11 @@
 		const client = PRIVATE.get(this);
 		console.error(`[${client.id}]: ERROR, channel:${client.channel_id}, error:${e.message}!`);
 		console.error(e);
+		client.socket.emit('disconnected');
 	}
-	function _ON_CLIENT_END(e) {
+	function _ON_CLIENT_END() {
 		const client = PRIVATE.get(this);
 		console.log(`[${client.id}]: CLOSE, channel:${client.channel_id}`);
+		client.socket.emit('disconnected');
 	}
 })();
