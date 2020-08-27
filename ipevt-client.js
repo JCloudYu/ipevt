@@ -12,7 +12,7 @@
 	
 	
 	const REQUEST_TIMEOUT = 10;
-	const MAX_BATCH_MSG = 100;
+	const MAX_BATCH_MSG = 30;
 	const ZERO_BUFFER = Buffer.alloc(0);
 	const MSG_TYPE = {
 		HELO: 0x01,
@@ -111,7 +111,8 @@
 	
 	
 	module.exports = function(options) {
-		let {host, port, channel_id, debug=false} = options;
+		let {host, port, channel_id, debug=false, timeout:req_timeout=REQUEST_TIMEOUT} = options;
+		req_timeout=req_timeout|0;
 		if ( !host || !port || !channel_id ) {
 			throw new Error("Destination host, port and channel_id must be assigned!");
 		}
@@ -172,10 +173,10 @@
 						const promise = new Promise((resolve, reject)=>{
 							const str_id = Buffer.from(unique_id).toString('base64');
 							client.cb_map.set(str_id, {
-								res:resolve, rej:reject, timeout:setTimeout(()=>{
+								res:resolve, rej:reject, timeout:req_timeout<=0?null:setTimeout(()=>{
 									reject(new Error("Timeout"));
 									client.cb_map.delete(str_id);
-								}, REQUEST_TIMEOUT * 1000)
+								}, req_timeout * 1000)
 							});
 						});
 						
@@ -237,7 +238,7 @@
 		CLIENT_STATE.timeout = null;
 	
 		const clients = new Set(CLIENT_STATE.queue.splice(0));
-		const messages = [], reader = new BufferReader();
+		const messages = [];
 		for(const client of clients) {
 			if ( client.debug ) {
 				console.log(client.chunk.toString('hex'));
@@ -246,15 +247,14 @@
 			
 			
 			if ( client.chunk.length === 0 ) continue;
-			reader.bindBuffer(client.chunk, 0);
 			
 			
-			const client_messages=[]; let has_data = false, loop=0;
+			
+			const client_messages=[]; let loop=0;
 			for(loop=0; loop<MAX_BATCH_MSG; loop++) {
-				const message = ___EAT_MESSAGE(reader, client);
+				const message = ___EAT_MESSAGE(client);
 				if ( message === null ) break;
 				if ( message === false ) continue;
-				has_data = true;
 				
 				
 				if ( client.state === 0 ) {
@@ -270,10 +270,6 @@
 				}
 				
 				client_messages.push(message);
-			}
-			
-			if ( has_data ) {
-				client.chunk = client.chunk.slice(reader.offset);
 			}
 			
 			
@@ -329,7 +325,7 @@
 					}, msg.func, ...msg.args);
 					break;
 				}
-					
+				
 				case MSG_TYPE.EVNT: {
 					client.socket.emit('_event', msg.event, msg.arg);
 					break;
@@ -338,24 +334,29 @@
 				case MSG_TYPE.CALL_SUCC: {
 					const str_id = msg.unique_id.toString('base64');
 					const cb = client.cb_map.get(str_id);
-					clearTimeout(cb.timeout);
-					client.cb_map.delete(str_id);
-					cb.res(msg.result);
+					if ( cb ) {
+						if ( cb.timeout ) clearTimeout(cb.timeout);
+						client.cb_map.delete(str_id);
+						cb.res(msg.result);
+					}
 					break;
 				}
 				
 				case MSG_TYPE.CALL_FAIL: {
 					const str_id = msg.unique_id.toString('base64');
 					const cb = client.cb_map.get(str_id);
-					clearTimeout(cb.timeout);
-					client.cb_map.delete(str_id);
-					cb.rej(msg.error);
+					if ( cb ) {
+						if ( cb.timeout ) clearTimeout(cb.timeout);
+						client.cb_map.delete(str_id);
+						cb.rej(msg.error);
+					}
 					break;
 				}
 			}
 		}
 	}
-	function ___EAT_MESSAGE(reader, client) {
+	function ___EAT_MESSAGE(client) {
+		const reader = new BufferReader(client.chunk, 0);
 		const cmd = reader.readUInt8();
 		if ( cmd === null ) return null;
 		
@@ -363,6 +364,7 @@
 		
 		// 0x01 + uint16 + bytes{0,}
 		if ( cmd === MSG_TYPE.HELO ) {
+			client.chunk = client.chunk.slice(reader.offset);
 			return { type:MSG_TYPE.HELO, client };
 		}
 		
@@ -401,6 +403,9 @@
 			
 			if ( args.length !== num_args ) return null;
 			
+			
+			
+			client.chunk = client.chunk.slice(reader.offset);
 			return { type:MSG_TYPE.CALL, unique_id, func, args, client };
 		}
 		
@@ -418,6 +423,8 @@
 			if ( result === null ) return null;
 			
 			
+			
+			client.chunk = client.chunk.slice(reader.offset);
 			return { type:MSG_TYPE.CALL_SUCC, unique_id, result:beson.Deserialize(result), client };
 		}
 		
@@ -435,6 +442,8 @@
 			if ( error === null ) return null;
 			
 			
+			
+			client.chunk = client.chunk.slice(reader.offset);
 			return { type:MSG_TYPE.CALL_FAIL, unique_id, error:beson.Deserialize(error), client };
 		}
 		
@@ -456,6 +465,7 @@
 			
 			
 			
+			client.chunk = client.chunk.slice(reader.offset);
 			return {type:MSG_TYPE.EVNT, event, arg:beson.Deserialize(arg), client};
 		}
 		
