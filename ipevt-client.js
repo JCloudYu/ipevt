@@ -162,58 +162,71 @@
 			PRIVATE.set(socket, client);
 			
 			
-			socket.invoke = function(func, ...args) {
-				const type = Buffer.from([MSG_TYPE.CALL]);
-				const unique_id = GenInstId(true);
-				const promise = new Promise((resolve, reject)=>{
-					const str_id = Buffer.from(unique_id).toString('base64');
-					client.cb_map.set(str_id, {
-						res:resolve, rej:reject, timeout:setTimeout(()=>{
-							reject(new Error("Timeout"));
-							client.cb_map.delete(str_id);
-						}, REQUEST_TIMEOUT * 1000)
-					});
-				});
-				
-				
-				
-				const func_name = Buffer.from(func, "utf8");
-				const func_len = Buffer.alloc(2);
-				func_len.writeUInt16LE(func_name.length);
-				
-				const arg_count = Buffer.from([args.length]);
-				socket.write(type);
-				socket.write(unique_id);
-				socket.write(func_len);
-				socket.write(func_name);
-				socket.write(arg_count);
-				for(const arg of args) {
-					const payload = Buffer.from(beson.Serialize(arg));
-					const payload_len = Buffer.alloc(4);
-					payload_len.writeUInt32LE(payload.length);
-					socket.write(payload_len);
-					socket.write(payload);
+			
+			Object.defineProperties(socket, {
+				invoke: {
+					enumerable:true,
+					value:function(func, ...args) {
+						const type = Buffer.from([MSG_TYPE.CALL]);
+						const unique_id = GenInstId(true);
+						const promise = new Promise((resolve, reject)=>{
+							const str_id = Buffer.from(unique_id).toString('base64');
+							client.cb_map.set(str_id, {
+								res:resolve, rej:reject, timeout:setTimeout(()=>{
+									reject(new Error("Timeout"));
+									client.cb_map.delete(str_id);
+								}, REQUEST_TIMEOUT * 1000)
+							});
+						});
+						
+						
+						
+						const func_name = Buffer.from(func, "utf8");
+						const func_len = Buffer.alloc(2);
+						func_len.writeUInt16LE(func_name.length);
+						
+						const arg_count = Buffer.from([args.length]);
+						socket.write(type);
+						socket.write(unique_id);
+						socket.write(func_len);
+						socket.write(func_name);
+						socket.write(arg_count);
+						for(const arg of args) {
+							const payload = Buffer.from(beson.Serialize(arg));
+							const payload_len = Buffer.alloc(4);
+							payload_len.writeUInt32LE(payload.length);
+							socket.write(payload_len);
+							socket.write(payload);
+						}
+						
+						
+						return promise;
+					}
+				},
+				send_event: {
+					enumerable:true,
+					value:function(event, arg) {
+						const type = Buffer.from([MSG_TYPE.EVNT]);
+						const event_name = Buffer.from(event, "utf8");
+						const event_len  = Buffer.alloc(2);
+						event_len.writeUInt16LE(event_name.length);
+						
+						socket.write(type);
+						socket.write(event_len);
+						socket.write(event_name);
+						
+						const payload = Buffer.from(beson.Serialize(arg));
+						const payload_len = Buffer.alloc(4);
+						payload_len.writeUInt32LE(payload.length);
+						socket.write(payload_len);
+						socket.write(payload);
+					}
+				},
+				connected: {
+					enumerable:true,
+					get(){ return client.state === 1; },
 				}
-				
-				
-				return promise;
-			};
-			socket.send_event = function(event, arg) {
-				const type = Buffer.from([MSG_TYPE.EVNT]);
-				const event_name = Buffer.from(event, "utf8");
-				const event_len  = Buffer.alloc(2);
-				event_len.writeUInt16LE(event_name.length);
-				
-				socket.write(type);
-				socket.write(event_len);
-				socket.write(event_name);
-				
-				const payload = Buffer.from(beson.Serialize(arg));
-				const payload_len = Buffer.alloc(4);
-				payload_len.writeUInt32LE(payload.length);
-				socket.write(payload_len);
-				socket.write(payload);
-			};
+			});
 		});
 	};
 	
@@ -479,11 +492,15 @@
 		const client = PRIVATE.get(this);
 		console.error(`[${client.id}]: ERROR, channel:${client.channel_id}, error:${e.message}!`);
 		console.error(e);
+		
+		client.state = 0;
 		client.socket.emit('disconnected');
 	}
 	function _ON_CLIENT_END() {
 		const client = PRIVATE.get(this);
 		console.log(`[${client.id}]: CLOSE, channel:${client.channel_id}`);
+		
+		client.state = 0;
 		client.socket.emit('disconnected');
 	}
 })();
