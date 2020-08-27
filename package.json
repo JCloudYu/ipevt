@@ -1,12 +1,13 @@
 {
 	"name": "ipevt",
-	"version": "0.9.4",
+	"version": "0.9.6",
 	"description": "A small library that allows peers to communicate via a central server",
 	"main": "ipevt-client.js",
 	"bin": {
 		"ipevt-server": "ipevt-server.js"
 	},
 	"scripts": {
+		"sample-client": "node ./sample/client.js",
 		"test": "echo \"Error: no test specified\" && exit 1"
 	},
 	"repository": {

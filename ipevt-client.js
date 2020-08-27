@@ -5,6 +5,7 @@
 (()=>{
 	"use strict";
 	
+	const events = require('events');
 	const beson = require('beson');
 	const net = require('net');
 	const GenInstId = require('./helper/gen-inst-id.js');
@@ -111,82 +112,102 @@
 	
 	
 	module.exports = function(options) {
-		let {host, port, channel_id, debug=false, timeout:req_timeout=REQUEST_TIMEOUT} = options;
-		req_timeout=req_timeout|0;
+		let {
+			host, port, channel_id,
+			invoke_timeout:req_timeout=REQUEST_TIMEOUT,
+			auto_reconnect=false, retry_count=-1, retry_interval=5,
+			debug=false,
+		} = options;
 		if ( !host || !port || !channel_id ) {
 			throw new Error("Destination host, port and channel_id must be assigned!");
 		}
 		
-	
-		return new Promise((resolve, reject)=>{
-			const client = Object.create(null);
-			const socket = net.connect(port, host)
-			.on('connect', _ON_CLIENT_CONN)
-			.on('data', _ON_CLIENT_DATA)
-			.on('end', function(...args) {
-				if ( resolve ) {
-					const rej = reject;
-					reject = null;
-					rej();
-				}
-				
-				_ON_CLIENT_END.call(this, ...args)
-			})
-			.on('error', function(e) {
-				if ( reject ) {
-					const rej = reject;
-					reject = null;
-					rej(e);
-				}
-				
-				_ON_CLIENT_ERROR.call(this, e);
-			})
-			.on('_hello', ()=>{
-				const res = resolve;
-				resolve = null;
-				res(socket);
-				
-				socket.emit('connected');
-			})
-			.on('_event', (event, arg)=>{
-				socket.emit(event, arg);
-			});
+		
+		
+		const inst = new events.EventEmitter();
+		const client = Object.create(null);
+		client.debug = !!debug;
+		client.id = GenInstId();
+		client.state = 0;
+		client.chunk = ZERO_BUFFER;
+		client.cb_map = new Map();
+		client.socket = null;
+		client.channel_id = channel_id;
+		client.auto_reconnect = auto_reconnect;
+		client.retry_count = retry_count|0;
+		client.retry_interval = retry_interval|0;
+		client.req_duration = req_timeout|0;
+		client.remote_host = host;
+		client.remote_port = port|0;
+		client.inst = inst;
+		client.msg_caches = [];
+		client.cached_msg_size = 0;
+		client.num_reties = 0;
+		PRIVATE.set(inst, client);
+		
+		
+		inst
+		.on('_hello', ()=>{
+			const socket = client.socket;
+			const caches = client.msg_caches.splice(0);
+			client.cached_msg_size = 0;
+			for(const cache of caches) {
+				socket.write(cache);
+			}
 			
 			
-			client.debug 		= !!debug;
-			client.id			= GenInstId();
-			client.state		= 0;
-			client.chunk		= ZERO_BUFFER;
-			client.channel_id	= channel_id;
-			client.socket		= socket;
-			client.cb_map		= new Map();
-			PRIVATE.set(socket, client);
+			client.num_reties = 0;
+			inst.emit('connected');
+		})
+		.on('_event', (event, arg)=>inst.emit(event, arg))
+		.on('_disconnected', ()=>{
+			client.num_reties++;
+			if ( !client.auto_reconnect || (client.retry_count > 0 && client.num_reties > client.retry_count) ) {
+				inst.emit('disconnected!');
+				return;
+			}
 			
 			
 			
-			Object.defineProperties(socket, {
-				invoke: {
-					enumerable:true,
-					value:function(func, ...args) {
-						const type = Buffer.from([MSG_TYPE.CALL]);
-						const unique_id = GenInstId(true);
-						const promise = new Promise((resolve, reject)=>{
-							const str_id = Buffer.from(unique_id).toString('base64');
-							client.cb_map.set(str_id, {
-								res:resolve, rej:reject, timeout:req_timeout<=0?null:setTimeout(()=>{
-									reject(new Error("Timeout"));
-									client.cb_map.delete(str_id);
-								}, req_timeout * 1000)
-							});
+			if ( client.socket ) {
+				client.socket.removeAllListeners();
+			}
+			
+			
+			inst.emit('reconnecting');
+			setTimeout(()=>{
+				BuildConnection(client).catch((e)=>{});
+			}, retry_interval * 1000);
+		});
+		
+		
+		
+		Object.defineProperties(inst, {
+			invoke: {
+				enumerable:true,
+				value:function(func, ...args) {
+					const client = PRIVATE.get(this);
+					const {socket, state} = client;
+					const type = Buffer.from([MSG_TYPE.CALL]);
+					const unique_id = GenInstId(true);
+					const promise = new Promise((resolve, reject)=>{
+						const str_id = Buffer.from(unique_id).toString('base64');
+						client.cb_map.set(str_id, {
+							res:resolve, rej:reject, timeout:req_timeout<=0?null:setTimeout(()=>{
+								reject(new Error("Timeout"));
+								client.cb_map.delete(str_id);
+							}, req_timeout * 1000)
 						});
-						
-						
-						
-						const func_name = Buffer.from(func, "utf8");
-						const func_len = Buffer.alloc(2);
-						func_len.writeUInt16LE(func_name.length);
-						
-						const arg_count = Buffer.from([args.length]);
+					});
+					
+					
+					
+					const func_name = Buffer.from(func, "utf8");
+					const func_len = Buffer.alloc(2);
+					func_len.writeUInt16LE(func_name.length);
+					
+					const arg_count = Buffer.from([args.length]);
+					if ( state ) {
 						socket.write(type);
 						socket.write(unique_id);
 						socket.write(func_len);
@@ -199,38 +220,98 @@
 							socket.write(payload_len);
 							socket.write(payload);
 						}
-						
-						
-						return promise;
 					}
-				},
-				send_event: {
-					enumerable:true,
-					value:function(event, arg) {
-						const type = Buffer.from([MSG_TYPE.EVNT]);
-						const event_name = Buffer.from(event, "utf8");
-						const event_len  = Buffer.alloc(2);
-						event_len.writeUInt16LE(event_name.length);
+					else {
+						const buffer = [type, unique_id, func_len, func_name, arg_count];
+						for(const arg of args) {
+							const payload = Buffer.from(beson.Serialize(arg));
+							const payload_len = Buffer.alloc(4);
+							payload_len.writeUInt32LE(payload.length);
+							buffer.push(payload_len);
+							buffer.push(payload);
+						}
 						
+						const msg_buffer = Buffer.concat(buffer);
+						client.msg_caches.push(msg_buffer);
+						client.cached_msg_size += msg_buffer.length;
+					}
+					
+					return promise;
+				}
+			},
+			send_event: {
+				enumerable:true,
+				value:function(event, arg) {
+					const client = PRIVATE.get(this);
+					const {socket, state} = client;
+					const type = Buffer.from([MSG_TYPE.EVNT]);
+					const event_name = Buffer.from(event, "utf8");
+					const event_len  = Buffer.alloc(2);
+					event_len.writeUInt16LE(event_name.length);
+					
+					const payload = Buffer.from(beson.Serialize(arg));
+					const payload_len = Buffer.alloc(4);
+					payload_len.writeUInt32LE(payload.length);
+					
+					
+					
+					if ( state ) {
 						socket.write(type);
 						socket.write(event_len);
 						socket.write(event_name);
-						
-						const payload = Buffer.from(beson.Serialize(arg));
-						const payload_len = Buffer.alloc(4);
-						payload_len.writeUInt32LE(payload.length);
 						socket.write(payload_len);
 						socket.write(payload);
 					}
-				},
-				connected: {
-					enumerable:true,
-					get(){ return client.state === 1; },
+					else {
+						const msg_buffer = Buffer.concat([type, event_len, event_name, payload_len, payload]);
+						client.msg_caches.push(msg_buffer);
+						client.cached_msg_size += msg_buffer.length;
+					}
 				}
-			});
+			},
+			connected: {
+				enumerable:true,
+				get(){ return client.state === 1; },
+			}
 		});
+		return BuildConnection(client);
 	};
 	
+	function BuildConnection(client) {
+		const {remote_host:host, remote_port:port, inst} = client;
+		
+		return new Promise((resolve, reject)=>{
+			client.socket = net.connect(port, host)
+			.on('connect', _ON_CLIENT_CONN.bind(client))
+			.on('data', _ON_CLIENT_DATA.bind(client))
+			.on('end', function(...args) {
+				if ( resolve ) {
+					const rej = reject;
+					reject = null;
+					resolve = null;
+					rej();
+				}
+				
+				_ON_CLIENT_END.call(client, ...args)
+			})
+			.on('error', function(e) {
+				if ( reject ) {
+					const rej = reject;
+					reject = null;
+					rej(e);
+				}
+				
+				_ON_CLIENT_ERROR.call(client, e);
+			})
+			.on('_hello', ()=>{
+				const res = resolve;
+				resolve = null;
+				res(client.inst);
+				
+				inst.emit('_hello');
+			});
+		});
+	}
 	
 	
 	
@@ -288,7 +369,7 @@
 			const {client} = msg;
 			switch(msg.type) {
 				case MSG_TYPE.CALL: {
-					client.socket.emit('call', {
+					client.inst.emit('call', {
 						success:(arg)=>{
 							client.socket.write(Buffer.from([MSG_TYPE.CALL_SUCC]));
 							client.socket.write(msg.unique_id);
@@ -327,7 +408,7 @@
 				}
 				
 				case MSG_TYPE.EVNT: {
-					client.socket.emit('_event', msg.event, msg.arg);
+					client.inst.emit('_event', msg.event, msg.arg);
 					break;
 				}
 				
@@ -475,42 +556,33 @@
 	
 	
 	
-	
 	function _ON_CLIENT_CONN() {
-		const client = PRIVATE.get(this);
-		const {channel_id} = client;
+		const {socket, channel_id} = this;
 		const encoded_channel_id = Buffer.from(channel_id, 'utf8');
 		
 		const length = new Uint16Array(1);
 		length[0] = encoded_channel_id.length;
 		
 		
-		this.write(Buffer.from([0x01]));
-		this.write(Buffer.from(length.buffer));
-		this.write(encoded_channel_id);
+		socket.write(Buffer.from([0x01]));
+		socket.write(Buffer.from(length.buffer));
+		socket.write(encoded_channel_id);
 	}
 	function _ON_CLIENT_DATA(chunk) {
-		const client = PRIVATE.get(this);
-		client.chunk = Buffer.concat([client.chunk, chunk]);
+		this.chunk = Buffer.concat([this.chunk, chunk]);
 		
-		CLIENT_STATE.queue.push(client);
+		CLIENT_STATE.queue.push(this);
 		if ( !CLIENT_STATE.timeout ) {
 			CLIENT_STATE.timeout = setTimeout(_PARSE_CLIENT_DATA, 0);
 		}
 	}
 	function _ON_CLIENT_ERROR(e) {
-		const client = PRIVATE.get(this);
-		console.error(`[${client.id}]: ERROR, channel:${client.channel_id}, error:${e.message}!`);
-		console.error(e);
-		
-		client.state = 0;
-		client.socket.emit('disconnected');
+		this.state = 0;
+		this.inst.emit('_error', e);
+		this.inst.emit('_disconnected', e);
 	}
 	function _ON_CLIENT_END() {
-		const client = PRIVATE.get(this);
-		console.log(`[${client.id}]: CLOSE, channel:${client.channel_id}`);
-		
-		client.state = 0;
-		client.socket.emit('disconnected');
+		this.state = 0;
+		this.inst.emit('_disconnected');
 	}
 })();
