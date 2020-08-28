@@ -5,8 +5,15 @@
 (async()=>{
 	"use strict";
 	
+	const beson = require('beson');
 	const ipevt = require('../ipevt-client.js');
-	const client = await ipevt({host:'127.0.0.1', port:65500, channel_id:'channel1', timeout:10, auto_reconnect:true, retry_count:3});
+	const client = await ipevt({
+		host:'127.0.0.1', port:65500,
+		channel_id:'channel1', timeout:10,
+		auto_reconnect:true, retry_count:3,
+		serializer:beson.Serialize,
+		deserializer:beson.Deserialize,
+	});
 	console.log("CONNECTED");
 	
 	client.on('disconnected', ()=>{

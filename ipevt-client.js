@@ -5,14 +5,7 @@
 (()=>{
 	"use strict";
 	
-	const beson = (()=>{
-		try {
-			return require(require.resolve('beson', {paths:require.main.paths}));
-		}
-		catch(e) {
-			return require('beson');
-		}
-	})();
+	const beson = require('beson');
 	const events = require('events');
 	const net = require('net');
 	const GenInstId = require('./helper/gen-inst-id.js');
@@ -123,10 +116,14 @@
 			host, port, channel_id,
 			invoke_timeout:req_timeout=REQUEST_TIMEOUT,
 			auto_reconnect=false, retry_count=-1, retry_interval=5,
-			debug=false,
+			debug=false, serializer=beson.Serialize, deserializer=beson.Deserialize
 		} = options;
 		if ( !host || !port || !channel_id ) {
 			throw new Error("Destination host, port and channel_id must be assigned!");
+		}
+		
+		if ( typeof serializer !== "function" || typeof deserializer !== "function" ) {
+			throw new Error("Client serializer and deserializer must be functions!");
 		}
 		
 		
@@ -150,6 +147,8 @@
 		client.msg_caches = [];
 		client.cached_msg_size = 0;
 		client.num_reties = 0;
+		client.serialize = serializer;
+		client.deserialize = deserializer;
 		PRIVATE.set(inst, client);
 		
 		
@@ -194,7 +193,7 @@
 				enumerable:true,
 				value:function(func, ...args) {
 					const client = PRIVATE.get(this);
-					const {socket, state} = client;
+					const {socket, state, serialize} = client;
 					const type = Buffer.from([MSG_TYPE.CALL]);
 					const unique_id = GenInstId(true);
 					const promise = new Promise((resolve, reject)=>{
@@ -221,7 +220,7 @@
 						socket.write(func_name);
 						socket.write(arg_count);
 						for(const arg of args) {
-							const payload = Buffer.from(beson.Serialize(arg));
+							const payload = Buffer.from(serialize(arg));
 							const payload_len = Buffer.alloc(4);
 							payload_len.writeUInt32LE(payload.length);
 							socket.write(payload_len);
@@ -231,7 +230,7 @@
 					else {
 						const buffer = [type, unique_id, func_len, func_name, arg_count];
 						for(const arg of args) {
-							const payload = Buffer.from(beson.Serialize(arg));
+							const payload = Buffer.from(serialize(arg));
 							const payload_len = Buffer.alloc(4);
 							payload_len.writeUInt32LE(payload.length);
 							buffer.push(payload_len);
@@ -250,13 +249,13 @@
 				enumerable:true,
 				value:function(event, arg) {
 					const client = PRIVATE.get(this);
-					const {socket, state} = client;
+					const {socket, state, serialize} = client;
 					const type = Buffer.from([MSG_TYPE.EVNT]);
 					const event_name = Buffer.from(event, "utf8");
 					const event_len  = Buffer.alloc(2);
 					event_len.writeUInt16LE(event_name.length);
 					
-					const payload = Buffer.from(beson.Serialize(arg));
+					const payload = Buffer.from(serialize(arg));
 					const payload_len = Buffer.alloc(4);
 					payload_len.writeUInt32LE(payload.length);
 					
@@ -283,7 +282,6 @@
 		});
 		return BuildConnection(client);
 	};
-	
 	function BuildConnection(client) {
 		const {remote_host:host, remote_port:port, inst} = client;
 		
@@ -319,9 +317,6 @@
 			});
 		});
 	}
-	
-	
-	
 	function _PARSE_CLIENT_DATA() {
 		CLIENT_STATE.timeout = null;
 	
@@ -387,7 +382,7 @@
 								client.socket.write(len);
 							}
 							else {
-								const payload = Buffer.from(beson.Serialize(arg));
+								const payload = Buffer.from(client.serialize(arg));
 								len.writeUInt32LE(payload.length);
 								
 								client.socket.write(len);
@@ -404,7 +399,7 @@
 								client.socket.write(len);
 							}
 							else {
-								const payload = Buffer.from(beson.Serialize(arg));
+								const payload = Buffer.from(client.serialize(arg));
 								len.writeUInt32LE(payload.length);
 								client.socket.write(len);
 								client.socket.write(payload);
@@ -485,7 +480,7 @@
 					const arg = reader.readBytes(len);
 					if ( arg === null ) return null;
 					
-					args.push(beson.Deserialize(arg));
+					args.push(client.deserialize(arg));
 				}
 			}
 			
@@ -513,7 +508,7 @@
 			
 			
 			client.chunk = client.chunk.slice(reader.offset);
-			return { type:MSG_TYPE.CALL_SUCC, unique_id, result:beson.Deserialize(result), client };
+			return { type:MSG_TYPE.CALL_SUCC, unique_id, result:client.deserialize(result), client };
 		}
 		
 		
@@ -532,7 +527,7 @@
 			
 			
 			client.chunk = client.chunk.slice(reader.offset);
-			return { type:MSG_TYPE.CALL_FAIL, unique_id, error:beson.Deserialize(error), client };
+			return { type:MSG_TYPE.CALL_FAIL, unique_id, error:client.deserialize(error), client };
 		}
 		
 		
@@ -554,7 +549,7 @@
 			
 			
 			client.chunk = client.chunk.slice(reader.offset);
-			return {type:MSG_TYPE.EVNT, event, arg:beson.Deserialize(arg), client};
+			return {type:MSG_TYPE.EVNT, event, arg:client.deserialize(arg), client};
 		}
 		
 		
