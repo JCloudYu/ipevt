@@ -5,8 +5,15 @@
 (()=>{
 	"use strict";
 	
+	const beson = (()=>{
+		try {
+			return require(require.resolve('beson', {paths:require.main.paths}));
+		}
+		catch(e) {
+			return require('beson');
+		}
+	})();
 	const events = require('events');
-	const beson = require('beson');
 	const net = require('net');
 	const GenInstId = require('./helper/gen-inst-id.js');
 	
