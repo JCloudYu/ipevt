@@ -1,6 +1,6 @@
 {
 	"name": "ipevt",
-	"version": "0.9.9",
+	"version": "0.9.11",
 	"description": "A small library that allows peers to communicate via a central server",
 	"main": "ipevt-client.js",
 	"bin": {

@@ -118,7 +118,7 @@
 			auto_reconnect=false, retry_count=-1, retry_interval=5,
 			debug=false, serializer=beson.Serialize, deserializer=beson.Deserialize
 		} = options;
-		if ( !host || !port || !channel_id ) {
+		if (!channel_id) {
 			throw new Error("Destination host, port and channel_id must be assigned!");
 		}
 		
@@ -163,13 +163,13 @@
 			
 			
 			client.num_reties = 0;
-			inst.emit('connected');
+			setTimeout(()=>inst.emit('connected'), 0);
 		})
 		.on('_event', (event, arg)=>inst.emit(event, arg))
 		.on('_disconnected', ()=>{
 			client.num_reties++;
-			if ( !client.auto_reconnect || (client.retry_count > 0 && client.num_reties > client.retry_count) ) {
-				inst.emit('disconnected!');
+			if ( !client.auto_reconnect || client.retry_count <= 0 || client.num_reties > client.retry_count ) {
+				inst.emit('disconnected');
 				return;
 			}
 			
@@ -189,6 +189,24 @@
 		
 		
 		Object.defineProperties(inst, {
+			connect: {
+				enumerable:true,
+				value:function(port, host) {
+					if ( client.state === 1 ) return this;
+				
+					client.remote_host = host;
+					client.remote_port = port;
+					return BuildConnection(client);
+				}
+			},
+			close: {
+				enumerable:true,
+				value:function() {
+					return new Promise((resolve, reject)=>{
+						client.socket.end((err)=>err?reject(err):resolve());
+					});
+				}
+			},
 			invoke: {
 				enumerable:true,
 				value:function(func, ...args) {
@@ -280,7 +298,12 @@
 				get(){ return client.state === 1; },
 			}
 		});
-		return BuildConnection(client);
+		
+		if ( host !== undefined || port !== undefined ) {
+			return BuildConnection(client);
+		}
+		
+		return inst;
 	};
 	function BuildConnection(client) {
 		const {remote_host:host, remote_port:port, inst} = client;

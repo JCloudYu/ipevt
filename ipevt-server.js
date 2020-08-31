@@ -246,6 +246,8 @@
 			if ( client.chunk.length === 0) continue;
 			
 			
+			
+			
 			const {room} = client;
 			const paired_client = (room.A===client)?room.B:room.A;
 			if ( !paired_client ) {
@@ -253,10 +255,12 @@
 				if ( !SERVER_STATE.timeout ) {
 					SERVER_STATE.timeout = setTimeout(_PARSE_CLIENT_DATA, 0);
 				}
+				console.log(`[${GetLocalISOString()}] MCHE, ${client.id}, len:${client.chunk.length}`);
 				continue;
 			}
 			
 			
+			console.log(`[${GetLocalISOString()}] MESG, ${client.id}, len:${client.chunk.length}`);
 			if ( debug ) {
 				console.log(`[${GetLocalISOString()}] DATA, ${client.id}, data:${client.chunk.toString('hex')}`);
 			}

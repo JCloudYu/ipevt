@@ -16,7 +16,12 @@
 	});
 	console.log("CONNECTED");
 	
-	client.on('disconnected', ()=>{
+	
+	client
+	.on('connected', ()=>{
+		console.log("connected 2");
+	})
+	.on('disconnected', ()=>{
 		console.log("disconnected");
 		process.exit(0);
 	})
