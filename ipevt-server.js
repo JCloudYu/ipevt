@@ -2,6 +2,7 @@
 (()=>{
 	"use strict";
 	
+	const ByteReader = require('./helper/byte-reader.js');
 	const GenInstId = require('./helper/gen-inst-id.js');
 	const term = require('./helper/term-code.js');
 	const net = require('net');
@@ -64,85 +65,6 @@
 	};
 	
 	
-	class BufferReader {
-		/** @type {Buffer} **/
-		#buffer = null;
-		#offset = 0;
-		constructor(buffer=null, offset=0) {
-			if ( buffer === null ) {
-				this.#buffer = Buffer.alloc(0);
-				this.#offset = 0;
-				return;
-			}
-			
-			this.#buffer = buffer;
-			this.#offset = offset;
-		}
-		bindBuffer(buffer, offset=0) {
-			this.#offset = offset;
-			this.#buffer = buffer;
-		}
-		readUInt8() {
-			const shift = this.#offset+1;
-			if ( this.#buffer.length < shift ) return null;
-			
-			const value = this.#buffer.readUInt8(this.#offset);
-			this.#offset = shift;
-			return value;
-		}
-		readUInt16LE() {
-			const shift = this.#offset+2;
-			if ( this.#buffer.length < shift ) return null;
-			
-			const value = this.#buffer.readUInt16LE(this.#offset);
-			this.#offset = shift;
-			return value;
-		}
-		readUInt32LE() {
-			const shift = this.#offset+4;
-			if ( this.#buffer.length < shift ) return null;
-			
-			const value = this.#buffer.readUInt32LE(this.#offset);
-			this.#offset = shift;
-			return value;
-		}
-		readFloat32LE() {
-			const shift = this.#offset+4;
-			if ( this.#buffer.length < shift ) return null;
-			
-			const value = this.#buffer.readFloatLE(this.#offset);
-			this.#offset = shift;
-			return value;
-		}
-		readFloat64LE() {
-			const shift = this.#offset+8;
-			if ( this.#buffer.length < shift ) return null;
-			
-			const value = this.#buffer.readDoubleLE(this.#offset);
-			this.#offset = shift;
-			return value;
-		}
-		readBytes(length) {
-			const shift = this.#offset+length;
-			if ( this.#buffer.length < shift ) return null;
-			
-			const value = this.#buffer.slice(this.#offset, shift);
-			this.#offset = shift;
-			return value;
-		}
-		readUTF8String(length) {
-			const shift = this.#offset+length;
-			if ( this.#buffer.length < shift ) return null;
-			
-			const value = this.#buffer.toString('utf8', this.#offset, shift);
-			this.#offset = shift;
-			return value;
-		}
-		
-		get offset() { return this.#offset; }
-	}
-	
-	
 	
 	
 	net.createServer((conn)=>{
@@ -153,6 +75,8 @@
 		client.valid	= true;
 		client.state	= 0;
 		client.chunk	= ZERO_BUFFER;
+		client.cache	= [];
+		client.cache_size = 0;
 		client.timeout	= setTimeout(()=>client.socket.end(), 5000);
 		client.room_id	= '';
 		client.room		= null;
@@ -171,24 +95,40 @@
 	
 	
 	
-	function ___EAT_HELO_MSG(client) {
-		const data_chunk = client.chunk;
-		const reader = new BufferReader(data_chunk);
-		const cmd = reader.readUInt8();
-		if ( cmd === null ) return null;
-		if ( cmd !== MSG_TYPE.HELO ) return false;
+	function ___EAT_SEGMENT(client) {
+		if ( client.chunk.length < 3 ) return false;
+		
+		const reader = new ByteReader(client.chunk, 0);
+		
+		reader.readUInt8(); reader.readUInt8();
+		const length  = reader.readUInt8();
+		const segment = reader.readBytes(length);
+		if ( segment === null ) return false;
+		
+		
+		const fragment = client.chunk.slice(0, reader.offset);
+		client.chunk = client.chunk.slice(reader.offset);
+		
+		return fragment;
+	}
+	function ___EAT_HELO_MSG(data_chunk) {
+		if ( data_chunk.length < 6 ) return null;
+		
+		const control_bits	= data_chunk.readUInt8(0);
+		const is_fin_seg	= ((control_bits & 0x80) === 0);
+		const command		= data_chunk.readUInt8(3);
+		
+		if ( !is_fin_seg || command !== MSG_TYPE.HELO ) return null;
 		
 		
 		
 		// 0x01 + uint16 + bytes{0,}
-		let len = reader.readUInt16LE();
-		if ( len === null ) return null;
+		const len = data_chunk.readUInt16LE(4);
 		
-		const channel_id = reader.readUTF8String(len);
-		if ( channel_id === null ) return null;
 		
-		client.chunk = data_chunk.slice(reader.offset);
-		return channel_id;
+		if ( data_chunk.length < (6+len) ) return null;
+		
+		return data_chunk.slice(6).toString('utf8');
 	}
 	function _PARSE_CLIENT_DATA() {
 		SERVER_STATE.timeout = null;
@@ -197,75 +137,74 @@
 		for(const client of clients) {
 			if ( !client.valid ) continue;
 			
-			
-			if ( client.state === 0 ) {
-				const channel_id = ___EAT_HELO_MSG(client);
-				if ( channel_id === false ) {
-					clearTimeout(client.timeout);
-					client.socket.end();
+			while(client.chunk.length>0) {
+				const segment = ___EAT_SEGMENT(client);
+				if ( !segment ) break;
+				
+				
+				if ( client.state === 0 ) {
+					const channel_id = ___EAT_HELO_MSG(segment);
+					if ( !channel_id ) {
+						clearTimeout(client.timeout);
+						client.socket.end();
+						break;
+					}
+					
+					
+					
+					if ( channel_id ) {
+						clearTimeout(client.timeout);
+					
+						client.state = 1;
+						let room = ROOM.get(channel_id);
+						if ( !room ) {
+							room = {A:client, B:null};
+							ROOM.set(channel_id, room);
+						}
+						else
+						if ( room.A === null ) {
+							room.A = client;
+						}
+						else
+						if ( room.B === null ) {
+							room.B = client;
+						}
+						else {
+							room.B.socket.end();
+							room.B = client;
+						}
+						
+						client.room_id = channel_id;
+						client.room = room;
+						client.socket.write(Buffer.from([0x00, 0x00, 0x01, 0x01]));
+						console.log(`[${GetLocalISOString()}] STAT, ${client.id}, channel:${client.room_id}`);
+					}
+					
+					continue;
+				}
+				
+				const {room} = client;
+				client.cache.push(segment);
+				client.cache_size += segment.length;
+				
+				
+				const paired_client = (room.A===client)?room.B:room.A;
+				if ( !paired_client ) {
+					console.log(`[${GetLocalISOString()}] SCHE, ${client.id}, channel:${client.room_id||'-'}, len:${client.cache_size}`);
 					continue;
 				}
 				
 				
 				
-				if ( channel_id ) {
-					clearTimeout(client.timeout);
-				
-					client.state = 1;
-					let room = ROOM.get(channel_id);
-					if ( !room ) {
-						room = {A:client, B:null};
-						ROOM.set(channel_id, room);
+				for(const seg of client.cache.splice(0)) {
+					console.log(`[${GetLocalISOString()}] SGMT, ${client.id}, channel:${client.room_id||'-'}, len:${seg.length}`);
+					if ( debug ) {
+						console.log(`[${GetLocalISOString()}] SDAT, ${client.id}, channel:${client.room_id||'-'}, data:${seg.toString('hex')}`);
 					}
-					else
-					if ( room.A === null ) {
-						room.A = client;
-					}
-					else
-					if ( room.B === null ) {
-						room.B = client;
-					}
-					else {
-						room.B.socket.end();
-						room.B = client;
-					}
-					
-					client.room_id = channel_id;
-					client.room = room;
-					client.socket.write(Buffer.from([0x01]));
-					console.log(`[${GetLocalISOString()}] STAT, ${client.id}, channel:${client.room_id}`);
+					paired_client.socket.write(seg);
+					client.cache_size -= seg.length;
 				}
-				
-				SERVER_STATE.queue.push(client);
-				if ( !SERVER_STATE.timeout ) {
-					SERVER_STATE.timeout = setTimeout(_PARSE_CLIENT_DATA, 0);
-				}
-				
-				continue;
 			}
-			if ( client.chunk.length === 0) continue;
-			
-			
-			
-			
-			const {room} = client;
-			const paired_client = (room.A===client)?room.B:room.A;
-			if ( !paired_client ) {
-				SERVER_STATE.queue.push(client);
-				if ( !SERVER_STATE.timeout ) {
-					SERVER_STATE.timeout = setTimeout(_PARSE_CLIENT_DATA, 0);
-				}
-				console.log(`[${GetLocalISOString()}] MCHE, ${client.id}, channel:${client.room_id||'-'}, len:${client.chunk.length}`);
-				continue;
-			}
-			
-			
-			console.log(`[${GetLocalISOString()}] MESG, ${client.id}, channel:${client.room_id||'-'}, len:${client.chunk.length}`);
-			if ( debug ) {
-				console.log(`[${GetLocalISOString()}] DATA, ${client.id}, channel:${client.room_id||'-'}, data:${client.chunk.toString('hex')}`);
-			}
-			paired_client.socket.write(client.chunk);
-			client.chunk = ZERO_BUFFER;
 		}
 	}
 	function _ON_CLIENT_DATA(chunk) {
@@ -280,7 +219,7 @@
 	function _ON_CLIENT_ERROR(e) {
 		const client = PRIVATE.get(this);
 		client.valid = false;
-		console.log(`[${GetLocalISOString()}] ERROR, ${client.id}, channel:${client.room_id||'-'}, error:${e.message}!`, e);
+		console.log(`[${GetLocalISOString()}] CERR, ${client.id}, channel:${client.room_id||'-'}, err:${e.code||e.message}`);
 		
 		const {room} = client;
 		if ( !room ) return;
