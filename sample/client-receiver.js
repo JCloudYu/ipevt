@@ -43,6 +43,10 @@
 	})
 	.on('call', (res, func, ...args)=>{
 		if ( func === "echo" ) {
+			res.success(args[0]);
+		}
+		else
+		if ( func === "random_error" ) {
 			const num = args[0]|0;
 			if ( num%2 === 0 ) {
 				res.success(num);
