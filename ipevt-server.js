@@ -80,6 +80,7 @@
 		client.timeout	= setTimeout(()=>client.socket.end(), 5000);
 		client.room_id	= '';
 		client.room		= null;
+		client.rslot	= '';
 		client.socket	= conn
 		.on('data',	 _ON_CLIENT_DATA)
 		.on('error', _ON_CLIENT_ERROR)
@@ -163,24 +164,28 @@
 						if ( !room ) {
 							room = {A:client, B:null};
 							ROOM.set(channel_id, room);
+							client.rslot = 'A';
 						}
 						else
 						if ( room.A === null ) {
 							room.A = client;
+							client.rslot = 'A';
 						}
 						else
 						if ( room.B === null ) {
 							room.B = client;
+							client.rslot = 'B';
 						}
 						else {
 							room.B.socket.end();
 							room.B = client;
+							client.rslot = 'B';
 						}
 						
 						client.room_id = channel_id;
 						client.room = room;
 						client.socket.write(Buffer.from([0x00, 0x00, 0x01, 0x01]));
-						console.log(`[${GetLocalISOString()}] STAT(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id}`);
+						console.log(`[${GetLocalISOString()}] STAT(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id}#${client.rslot}`);
 					}
 					
 					continue;
@@ -196,16 +201,16 @@
 				
 				const paired_client = (room.A===client)?room.B:room.A;
 				if ( !paired_client ) {
-					console.log(`[${GetLocalISOString()}] SCHE(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id||'-'}, len:${client.cache_size}`);
+					console.log(`[${GetLocalISOString()}] SCHE(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id||'-'}#${client.rslot}, len:${client.cache_size}`);
 					continue;
 				}
 				
 				
 				
 				for(const seg of client.cache.splice(0)) {
-					console.log(`[${GetLocalISOString()}] SGMT(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id||'-'}, len:${seg.length}`);
+					console.log(`[${GetLocalISOString()}] SGMT(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id||'-'}#${client.rslot}, len:${seg.length}`);
 					if ( debug ) {
-						console.log(`[${GetLocalISOString()}] SDAT, ${client.id}, channel:${client.room_id||'-'}, data:${seg.toString('hex')}`);
+						console.log(`[${GetLocalISOString()}] SDAT, ${client.id}, channel:${client.room_id||'-'}#${client.rslot}, data:${seg.toString('hex')}`);
 					}
 					paired_client.socket.write(seg);
 					client.cache_size -= seg.length;
@@ -225,7 +230,7 @@
 	function _ON_CLIENT_ERROR(e) {
 		const client = PRIVATE.get(this);
 		client.valid = false;
-		console.log(`[${GetLocalISOString()}] CERR, ${client.id}, channel:${client.room_id||'-'}, err:${e.code||e.message}`);
+		console.log(`[${GetLocalISOString()}] CERR, ${client.id}, channel:${client.room_id||'-'}#${client.rslot}, err:${e.code||e.message}`);
 		
 		const {room} = client;
 		if ( !room ) return;
@@ -242,7 +247,7 @@
 	function _ON_CLIENT_END(e) {
 		const client = PRIVATE.get(this);
 		client.valid = false;
-		console.log(`[${GetLocalISOString()}] CLOS, ${client.id}, channel:${client.room_id||'-'}`);
+		console.log(`[${GetLocalISOString()}] CLOS, ${client.id}, channel:${client.room_id||'-'}#${client.rslot}`);
 		
 		const {room} = client;
 		if ( !room ) return;
