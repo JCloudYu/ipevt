@@ -312,8 +312,8 @@
 			if ( client.debug ) { console.log("client-data", client.chunk.toString('hex')); }
 			if ( client.chunk.length === 0 ) continue;
 			
-			const client_messages = [];
-			for(let loop=0; loop<MAX_BATCH_MSG; loop++) {
+			let batch_loop, client_messages = [];
+			for(batch_loop=0; batch_loop<MAX_BATCH_MSG; batch_loop++) {
 				const payload = ___EAT_PAYLOAD(client);
 				if ( !payload ) continue;
 				
@@ -338,7 +338,7 @@
 				client_messages.push(message);
 			}
 			
-			if ( client.chunk.length > 0 && client_messages.length > 0 ) {
+			if ( client.chunk.length > 0 && batch_loop>=MAX_BATCH_MSG ) {
 				CLIENT_STATE.queue.push(client);
 				if ( CLIENT_STATE.timeout === null ) {
 					CLIENT_STATE.timeout = setTimeout(___PARSE_CLIENT_DATA, 0);
