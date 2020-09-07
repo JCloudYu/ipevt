@@ -142,6 +142,9 @@
 				if ( !segment ) break;
 				
 				
+				
+				const IS_FIN_SEGMENT = (segment[0]&0x80)===0;
+				const SEGMENT_ID = Padding(segment[1].toString(16), 2);
 				if ( client.state === 0 ) {
 					const channel_id = ___EAT_HELO_MSG(segment);
 					if ( !channel_id ) {
@@ -177,11 +180,14 @@
 						client.room_id = channel_id;
 						client.room = room;
 						client.socket.write(Buffer.from([0x00, 0x00, 0x01, 0x01]));
-						console.log(`[${GetLocalISOString()}] STAT, ${client.id}, channel:${client.room_id}`);
+						console.log(`[${GetLocalISOString()}] STAT(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id}`);
 					}
 					
 					continue;
 				}
+				
+				
+				
 				
 				const {room} = client;
 				client.cache.push(segment);
@@ -190,14 +196,14 @@
 				
 				const paired_client = (room.A===client)?room.B:room.A;
 				if ( !paired_client ) {
-					console.log(`[${GetLocalISOString()}] SCHE, ${client.id}, channel:${client.room_id||'-'}, len:${client.cache_size}`);
+					console.log(`[${GetLocalISOString()}] SCHE(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id||'-'}, len:${client.cache_size}`);
 					continue;
 				}
 				
 				
 				
 				for(const seg of client.cache.splice(0)) {
-					console.log(`[${GetLocalISOString()}] SGMT, ${client.id}, channel:${client.room_id||'-'}, len:${seg.length}`);
+					console.log(`[${GetLocalISOString()}] SGMT(${SEGMENT_ID}:${IS_FIN_SEGMENT?'FIN':'CNT'}), ${client.id}, channel:${client.room_id||'-'}, len:${seg.length}`);
 					if ( debug ) {
 						console.log(`[${GetLocalISOString()}] SDAT, ${client.id}, channel:${client.room_id||'-'}, data:${seg.toString('hex')}`);
 					}
